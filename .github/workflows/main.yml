@@ -1,95 +1,109 @@
-name: 😈 Smart Multi-Part Downloader + Merge + MAX Compression
+name: 🚀 Smart Downloader + Merger + Compressor + GoFile Upload
 
 on:
   workflow_dispatch:
     inputs:
-      url:
-        description: "🌐 First part link (example: file_01.zip)"
+      mode:
+        description: "📦 Choose Mode"
         required: true
-      output:
-        description: "📦 Output name"
-        default: "merged_file"
+        default: "game"
+        type: choice
+        options:
+          - game
+          - rom
+
+      urls:
+        description: "🔗 Direct URLs (one per line)"
+        required: true
+        type: string
+
+      output_name:
+        description: "📁 Output Name (without extension)"
+        required: true
+        default: "MK_Output"
+        type: string
 
 jobs:
-  build:
+  process:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
 
     steps:
-      - name: 📦 Install tools
+      - name: 📥 Install Tools
         run: |
           sudo apt update
-          sudo apt install -y aria2 p7zip-full wget
+          sudo apt install -y aria2 zip unzip p7zip-full curl jq
 
-      # =========================
-      # 🧠 Generate parts links
-      # =========================
-      - name: 🧠 Detect multi-part files
-        id: parts
+      - name: 📥 Download Files
         run: |
-          BASE="${{ github.event.inputs.url }}"
-          
-          echo "Base link: $BASE"
+          mkdir files
+          cd files
 
-          # محاولة اكتشاف pattern زي file_01.zip
-          PREFIX=$(echo "$BASE" | sed -E 's/[0-9]+(\.[a-zA-Z0-9]+)$/\1/')
-          EXT=$(echo "$BASE" | grep -oE '\.[a-zA-Z0-9]+$')
+          echo "${{ github.event.inputs.urls }}" > links.txt
 
-          echo "PREFIX=$PREFIX" >> $GITHUB_ENV
-          echo "EXT=$EXT" >> $GITHUB_ENV
+          aria2c -x16 -s16 -j5 -i links.txt
 
-      # =========================
-      # 🚀 Download all parts
-      # =========================
-      - name: 🚀 Download parts
+      - name: 🧠 Detect & Merge Parts
         run: |
-          BASE="${{ github.event.inputs.url }}"
-          
-          echo "Downloading parts..."
+          cd files
 
-          i=1
-          while true; do
-            NUM=$(printf "%02d" $i)
-            PART=$(echo "$BASE" | sed -E "s/[0-9]+(\.[a-zA-Z0-9]+)$/$(printf "%02d" $i)\1/")
-            
-            echo "Trying: $PART"
+          echo "🔍 Checking for split files..."
 
-            aria2c -x16 -s16 "$PART" -o part_$NUM 2>/dev/null || break
+          # rar parts
+          if ls *.part1.rar 1> /dev/null 2>&1; then
+            echo "🧩 RAR split detected"
+            unrar x *.part1.rar
+          fi
 
-            if [ ! -f "part_$NUM" ]; then
-              break
-            fi
+          # zip parts
+          if ls *.zip.001 1> /dev/null 2>&1; then
+            echo "🧩 ZIP split detected"
+            7z x *.zip.001
+          fi
 
-            echo "Downloaded part_$NUM"
-            i=$((i+1))
-          done
+          # file_01.zip style
+          if ls *01.zip 1> /dev/null 2>&1; then
+            echo "🧩 Numbered ZIP detected"
+            cat *.zip > merged.zip
+            unzip merged.zip
+          fi
 
-      # =========================
-      # 📦 Merge files
-      # =========================
-      - name: 📦 Merge parts
+      - name: ⚙️ Process Mode
         run: |
-          echo "Merging..."
+          mkdir output
 
-          cat part_* > merged_input
+          if [ "${{ github.event.inputs.mode }}" == "game" ]; then
+            echo "🎮 Game Mode Activated"
+            mv files/* output/ 2>/dev/null || true
+          else
+            echo "📱 ROM Mode Activated"
+            mv files/* output/ 2>/dev/null || true
 
-          ls -lh merged_input
+            # تنظيف الرومات
+            rm -rf output/*.img 2>/dev/null || true
+            rm -rf output/payload.bin 2>/dev/null || true
+          fi
 
-      # =========================
-      # 🔥 MAX Compression
-      # =========================
-      - name: 🔥 Ultra compress
+      - name: 🗜️ Compress Output
         run: |
-          7z a -t7z "${{ github.event.inputs.output }}.7z" merged_input \
-          -mx=9 -m0=lzma2 -mfb=273 -md=256m -ms=on -mmt=on
+          cd output
+          zip -r9 "../${{ github.event.inputs.output_name }}.zip" .
 
-      # =========================
-      # 📤 Upload
-      # =========================
-      - name: 📤 Upload Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: merged-${{ github.run_id }}
-          files: "${{ github.event.inputs.output }}.7z"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: ☁️ Upload to GoFile
+        run: |
+          FILE="${{ github.event.inputs.output_name }}.zip"
+
+          echo "📤 Uploading to GoFile..."
+
+          SERVER=$(curl -s https://api.gofile.io/getServer | jq -r '.data.server')
+
+          RESPONSE=$(curl -s -F "file=@$FILE" https://$SERVER.gofile.io/uploadFile)
+
+          LINK=$(echo $RESPONSE | jq -r '.data.downloadPage')
+
+          echo "🔗 Download Link: $LINK"
+          echo "LINK=$LINK" >> $GITHUB_ENV
+
+      - name: 📢 Show Result
+        run: |
+          echo "✅ Done!"
+          echo "🔗 $LINK"
