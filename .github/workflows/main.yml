@@ -1,76 +1,36 @@
-name: Smart Downloader FIXED
+name: WORKING DOWNLOADER
 
 on:
 workflow_dispatch:
 inputs:
-urls:
-description: "URLs"
+url:
+description: "Download URL"
 required: true
-
-  output_name:
-    description: "Output Name"
-    required: true
-    default: "OUTPUT"
+name:
+description: "Output Name"
+required: true
+default: "output"
 
 jobs:
 build:
 runs-on: ubuntu-latest
 
 steps:
-  - uses: actions/checkout@v4
-
-  - name: Install
+  - name: Install tools
     run: |
       sudo apt update
-      sudo apt install -y aria2 curl unzip zip p7zip-full unrar python3 python3-pip
-      pip3 install requests beautifulsoup4
+      sudo apt install -y aria2 zip unzip
 
-  - name: Prepare
+  - name: Download file
     run: |
-      mkdir -p files
-      echo "${{ github.event.inputs.urls }}" > files/links.txt
-
-  - name: Extract Links
-    run: |
-      python3 extractor.py
-
-  - name: Download
-    run: |
+      mkdir files
       cd files
-      if [ ! -s direct.txt ]; then
-        echo "No links found"
-        exit 1
-      fi
-      aria2c -x16 -s16 -j5 -i direct.txt
-
-  - name: Extract
-    run: |
-      cd files
-
-      if ls *.part1.rar 1> /dev/null 2>&1; then
-        unrar x -o+ *.part1.rar
-      fi
-
-      if ls *.rar 1> /dev/null 2>&1; then
-        unrar x -o+ *.rar
-      fi
-
-      if ls *.zip 1> /dev/null 2>&1; then
-        unzip -o "*.zip"
-      fi
-
-      if ls *.7z 1> /dev/null 2>&1; then
-        7z x -y *.7z
-      fi
+      aria2c "${{ github.event.inputs.url }}"
 
   - name: Compress
     run: |
-      mkdir output
-      cp -r files/* output/ || true
-      cd output
-      zip -r9 "../${{ github.event.inputs.output_name }}.zip" .
+      zip -r "${{ github.event.inputs.name }}.zip" files
 
   - name: Upload
     run: |
-      FILE="${{ github.event.inputs.output_name }}.zip"
-      curl -F "file=@$FILE" https://store1.gofile.io/uploadFile
+      curl -F "file=@${{ github.event.inputs.name }}.zip" https://store1.gofile.io/uploadFile
