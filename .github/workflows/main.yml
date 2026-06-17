@@ -83,6 +83,52 @@ jobs:
             --console-log-level=warn \
             -i direct_links.txt
 
+      - name: Validate downloaded files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd files
+
+          total=0
+          big_count=0
+          suspicious=0
+
+          for f in *; do
+            [[ -f "$f" ]] || continue
+            [[ "$f" == "raw_links.txt" || "$f" == "direct_links.txt" || "$f" == "extractor.py" ]] && continue
+
+            total=$((total + 1))
+            size=$(stat -c%s "$f" 2>/dev/null || echo 0)
+
+            # Count files that look like real payloads (>=10MB)
+            if [[ "$size" -ge 10485760 ]]; then
+              big_count=$((big_count + 1))
+            fi
+
+            # Detect common HTML/captcha pages saved instead of binary content.
+            if [[ "$size" -lt 1048576 ]]; then
+              if head -c 1024 "$f" | tr -d '\000' | grep -Eiq '<html|<!doctype|captcha|cloudflare|access denied|datanodes'; then
+                echo "Suspicious file (HTML/protection page): $f"
+                suspicious=$((suspicious + 1))
+              fi
+            fi
+          done
+
+          echo "Downloaded files: $total"
+          echo "Files >= 10MB : $big_count"
+          echo "Suspicious files: $suspicious"
+
+          if [[ "$total" -eq 0 ]]; then
+            echo "No files were downloaded."
+            exit 1
+          fi
+
+          # Fail fast if everything looks like blocked pages or tiny stubs.
+          if [[ "$big_count" -eq 0 ]]; then
+            echo "All downloads are tiny. Links are likely not direct file links."
+            exit 1
+          fi
+
       - name: Extract archives
         shell: bash
         run: |
