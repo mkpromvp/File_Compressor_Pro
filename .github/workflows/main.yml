@@ -1,44 +1,95 @@
-name: 🔥 Max Compression Upload
+name: 😈 Smart Multi-Part Downloader + Merge + MAX Compression
 
 on:
   workflow_dispatch:
     inputs:
-      file_url:
-        description: "🔗 Direct file link"
+      url:
+        description: "🌐 First part link (example: file_01.zip)"
         required: true
-      output_name:
-        description: "📦 Output name (without extension)"
-        required: false
-        default: "compressed"
+      output:
+        description: "📦 Output name"
+        default: "merged_file"
 
 jobs:
-  compress:
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
       - name: 📦 Install tools
         run: |
           sudo apt update
-          sudo apt install -y p7zip-full wget aria2
+          sudo apt install -y aria2 p7zip-full wget
 
-      - name: 🚀 Download file (fast)
+      # =========================
+      # 🧠 Generate parts links
+      # =========================
+      - name: 🧠 Detect multi-part files
+        id: parts
         run: |
-          aria2c -x16 -s16 "${{ github.event.inputs.file_url }}" -o input_file
+          BASE="${{ github.event.inputs.url }}"
+          
+          echo "Base link: $BASE"
 
-      - name: 🔍 Show file info
-        run: |
-          ls -lh
-          du -h input_file
+          # محاولة اكتشاف pattern زي file_01.zip
+          PREFIX=$(echo "$BASE" | sed -E 's/[0-9]+(\.[a-zA-Z0-9]+)$/\1/')
+          EXT=$(echo "$BASE" | grep -oE '\.[a-zA-Z0-9]+$')
 
-      - name: 🔥 Ultra Compress (MAX)
+          echo "PREFIX=$PREFIX" >> $GITHUB_ENV
+          echo "EXT=$EXT" >> $GITHUB_ENV
+
+      # =========================
+      # 🚀 Download all parts
+      # =========================
+      - name: 🚀 Download parts
         run: |
-          7z a -t7z "${{ github.event.inputs.output_name }}.7z" input_file \
+          BASE="${{ github.event.inputs.url }}"
+          
+          echo "Downloading parts..."
+
+          i=1
+          while true; do
+            NUM=$(printf "%02d" $i)
+            PART=$(echo "$BASE" | sed -E "s/[0-9]+(\.[a-zA-Z0-9]+)$/$(printf "%02d" $i)\1/")
+            
+            echo "Trying: $PART"
+
+            aria2c -x16 -s16 "$PART" -o part_$NUM 2>/dev/null || break
+
+            if [ ! -f "part_$NUM" ]; then
+              break
+            fi
+
+            echo "Downloaded part_$NUM"
+            i=$((i+1))
+          done
+
+      # =========================
+      # 📦 Merge files
+      # =========================
+      - name: 📦 Merge parts
+        run: |
+          echo "Merging..."
+
+          cat part_* > merged_input
+
+          ls -lh merged_input
+
+      # =========================
+      # 🔥 MAX Compression
+      # =========================
+      - name: 🔥 Ultra compress
+        run: |
+          7z a -t7z "${{ github.event.inputs.output }}.7z" merged_input \
           -mx=9 -m0=lzma2 -mfb=273 -md=256m -ms=on -mmt=on
 
-      - name: 📤 Upload to GitHub Release
+      # =========================
+      # 📤 Upload
+      # =========================
+      - name: 📤 Upload Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: compressed-${{ github.run_id }}
-          files: "${{ github.event.inputs.output_name }}.7z"
+          tag_name: merged-${{ github.run_id }}
+          files: "${{ github.event.inputs.output }}.7z"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
