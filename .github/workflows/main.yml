@@ -45,7 +45,17 @@ jobs:
           sed -i '/^[[:space:]]*$/d' raw_links.txt
           sed -i 's/^[[:space:]]*//;s/[[:space:]]*$//' raw_links.txt
 
-          cp ../scripts/extractor.py ./extractor.py
+          # Support both locations: scripts/extractor.py or extractor.py at repo root.
+          if [[ -f ../scripts/extractor.py ]]; then
+            cp ../scripts/extractor.py ./extractor.py
+          elif [[ -f ../extractor.py ]]; then
+            cp ../extractor.py ./extractor.py
+          else
+            echo "extractor.py not found in scripts/ or repo root"
+            ls -la ..
+            exit 1
+          fi
+
           python3 ./extractor.py
 
       - name: Download files
