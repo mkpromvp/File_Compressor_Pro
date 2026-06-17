@@ -1,36 +1,295 @@
-name: WORKING DOWNLOADER
+name: 💀 Smart Downloader AI + Auto Extract + GoFile
 
 on:
-workflow_dispatch:
-inputs:
-url:
-description: "Download URL"
-required: true
-name:
-description: "Output Name"
-required: true
-default: "output"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "📦 Mode"
+        required: true
+        default: "game"
+        type: choice
+        options:
+          - game
+          - rom
+
+      urls:
+        description: "🔗 URLs (ANY type - direct or page)"
+        required: true
+        type: string
+
+      output_name:
+        description: "📁 Output Name"
+        required: true
+        default: "MK_PRO_OUTPUT"
+        type: string
 
 jobs:
-build:
-runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
 
-steps:
-  - name: Install tools
-    run: |
-      sudo apt update
-      sudo apt install -y aria2 zip unzip
+    steps:
+      - name: ⚙️ Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            aria2 curl jq unzip zip p7zip-full unrar python3 python3-pip
+          pip install --quiet requests bs4 lxml
 
-  - name: Download file
-    run: |
-      mkdir files
-      cd files
-      aria2c "${{ github.event.inputs.url }}"
+      - name: 🧠 Smart Link Extractor
+        run: |
+          mkdir -p files
+          cd files
 
-  - name: Compress
-    run: |
-      zip -r "${{ github.event.inputs.name }}.zip" files
+          cat <<'LINKS' > raw_links.txt
+          ${{ github.event.inputs.urls }}
+          LINKS
 
-  - name: Upload
-    run: |
-      curl -F "file=@${{ github.event.inputs.name }}.zip" https://store1.gofile.io/uploadFile
+          # Strip blank lines and spaces
+          sed -i '/^[[:space:]]*$/d' raw_links.txt
+          sed -i 's/^[[:space:]]*//;s/[[:space:]]*$//' raw_links.txt
+
+          echo "🔍 Extracting real download links..."
+
+          python3 << 'PYEOF'
+import requests
+from bs4 import BeautifulSoup
+import sys, os
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+}
+
+ARCHIVE_EXTS = (".zip", ".rar", ".7z", ".iso", ".tar", ".gz", ".xz", ".001")
+
+final_links = []
+
+with open("raw_links.txt") as f:
+    links = [l.strip() for l in f if l.strip()]
+
+if not links:
+    print("❌ No URLs provided. Exiting.")
+    sys.exit(1)
+
+for url in links:
+    print(f"\n🔍 Checking: {url}")
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True)
+        content_type = r.headers.get("content-type", "")
+
+        # ── Direct file (by Content-Type or URL extension) ──────────────
+        if (
+            "application/octet-stream" in content_type
+            or "application/zip" in content_type
+            or any(url.lower().endswith(ext) for ext in ARCHIVE_EXTS)
+        ):
+            print(f"  ✅ Direct link detected")
+            final_links.append(url)
+            continue
+
+        soup = BeautifulSoup(r.text, "lxml")
+
+        # ── MediaFire ───────────────────────────────────────────────────
+        btn = soup.find("a", {"id": "downloadButton"})
+        if btn and btn.get("href"):
+            print(f"  ✅ MediaFire link found")
+            final_links.append(btn["href"])
+            continue
+
+        # ── GoFile page ─────────────────────────────────────────────────
+        if "gofile.io" in url:
+            print(f"  ℹ️  GoFile page – keeping as-is (use GoFile API separately)")
+            final_links.append(url)
+            continue
+
+        # ── Generic: scan all <a> for archive extensions ─────────────────
+        found = False
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if any(ext in href.lower() for ext in ARCHIVE_EXTS):
+                full = href if href.startswith("http") else requests.compat.urljoin(url, href)
+                print(f"  ✅ Generic archive link: {full}")
+                final_links.append(full)
+                found = True
+
+        if not found:
+            print(f"  ⚠️  No downloadable link found on page: {url}")
+
+    except Exception as e:
+        print(f"  ❌ Error processing {url}: {e}")
+
+if not final_links:
+    print("\n❌ No valid download links were found. Aborting.")
+    sys.exit(1)
+
+with open("direct_links.txt", "w") as f:
+    for l in final_links:
+        f.write(l + "\n")
+
+print("\n📋 Final download list:")
+for l in final_links:
+    print(f"  → {l}")
+PYEOF
+
+      - name: 📥 Download files
+        run: |
+          cd files
+
+          if [ ! -s direct_links.txt ]; then
+            echo "❌ direct_links.txt is empty or missing."
+            exit 1
+          fi
+
+          echo "📥 Starting download with aria2c..."
+          aria2c \
+            --max-connection-per-server=16 \
+            --split=16 \
+            --max-concurrent-downloads=5 \
+            --continue=true \
+            --retry-wait=5 \
+            --max-tries=5 \
+            --file-allocation=none \
+            --console-log-level=warn \
+            --summary-interval=30 \
+            -i direct_links.txt
+
+      - name: 🧩 Extract & Merge archives
+        run: |
+          cd files
+          echo "🔍 Processing downloaded archives..."
+
+          extract_if_exists() {
+            local pattern="$1"
+            local cmd="$2"
+            if ls $pattern 1>/dev/null 2>&1; then
+              echo "📂 Extracting: $pattern"
+              eval "$cmd"
+            fi
+          }
+
+          # RAR multi-part
+          extract_if_exists "*.part1.rar" "unrar x -y *.part1.rar"
+          extract_if_exists "*.part01.rar" "unrar x -y *.part01.rar"
+
+          # RAR single (skip if already extracted via part1)
+          if ls *.rar 1>/dev/null 2>&1 && ! ls *.part1.rar *.part01.rar 1>/dev/null 2>&1; then
+            unrar x -y *.rar
+          fi
+
+          # ZIP multi-part
+          extract_if_exists "*.zip.001" "7z x *.zip.001 -y"
+
+          # ZIP single (skip if already extracted via .001)
+          if ls *.zip 1>/dev/null 2>&1 && ! ls *.zip.001 1>/dev/null 2>&1; then
+            for f in *.zip; do
+              echo "  📦 Unzipping: $f"
+              unzip -o "$f" -d "${f%.zip}_extracted" || true
+            done
+          fi
+
+          # 7-Zip
+          extract_if_exists "*.7z"  "7z x *.7z  -y"
+          extract_if_exists "*.7z.001" "7z x *.7z.001 -y"
+
+          # ISO
+          extract_if_exists "*.iso" "7z x *.iso -y"
+
+          # tar.gz / tar.xz
+          extract_if_exists "*.tar.gz"  "tar -xzf *.tar.gz"
+          extract_if_exists "*.tar.xz"  "tar -xJf *.tar.xz"
+          extract_if_exists "*.tar.bz2" "tar -xjf *.tar.bz2"
+
+          echo "✅ Extraction complete."
+
+      - name: ⚙️ Mode Handler
+        run: |
+          mkdir -p output
+          echo "📋 Mode: ${{ github.event.inputs.mode }}"
+
+          cp -r files/* output/ 2>/dev/null || true
+
+          if [ "${{ github.event.inputs.mode }}" == "rom" ]; then
+            echo "📱 ROM mode – removing raw image artifacts..."
+            find output -maxdepth 1 \( -name "*.img" -o -name "payload.bin" -o -name "care_map.pb" \) -delete
+          fi
+
+          echo "📁 Output contents:"
+          ls -lh output/ | head -40
+
+      - name: 🗜️ Compress output
+        run: |
+          OUTPUT_ZIP="${{ github.event.inputs.output_name }}.zip"
+          echo "🗜️ Compressing to $OUTPUT_ZIP ..."
+
+          cd output
+          zip -r9 "../${OUTPUT_ZIP}" .
+
+          cd ..
+          SIZE=$(du -sh "$OUTPUT_ZIP" | cut -f1)
+          echo "✅ Archive size: $SIZE"
+
+      - name: ☁️ Upload to GoFile
+        id: gofile_upload
+        run: |
+          FILE="${{ github.event.inputs.output_name }}.zip"
+
+          if [ ! -f "$FILE" ]; then
+            echo "❌ Output ZIP not found: $FILE"
+            exit 1
+          fi
+
+          echo "📡 Getting best GoFile server..."
+          SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name // "store1"')
+          echo "  Server: $SERVER"
+
+          echo "📤 Uploading $FILE to $SERVER.gofile.io ..."
+          RESPONSE=$(curl -s \
+            -F "file=@$FILE" \
+            "https://${SERVER}.gofile.io/uploadFile")
+
+          echo "📨 Raw response: $RESPONSE"
+
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // "error"')
+
+          if [ "$STATUS" != "ok" ]; then
+            echo "❌ Upload failed. Status: $STATUS"
+            echo "Response: $RESPONSE"
+            exit 1
+          fi
+
+          LINK=$(echo "$RESPONSE" | jq -r '.data.downloadPage // empty')
+          CODE=$(echo "$RESPONSE" | jq -r '.data.code // empty')
+
+          if [ -z "$LINK" ]; then
+            echo "❌ Could not parse download link."
+            exit 1
+          fi
+
+          echo "✅ Upload successful!"
+          echo "🔗 Download Page : $LINK"
+          echo "📦 File Code     : $CODE"
+
+          echo "GOFILE_LINK=$LINK" >> "$GITHUB_ENV"
+          echo "GOFILE_CODE=$CODE" >> "$GITHUB_ENV"
+
+          # Write summary to GitHub Step Summary
+          echo "## ✅ Upload Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📦 File | $FILE (${SIZE:-?}) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔗 Link | [$LINK]($LINK) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🖥️ Server | $SERVER |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ✅ Done
+        run: |
+          echo "======================================"
+          echo "🔥 SMART DOWNLOADER — COMPLETE"
+          echo "======================================"
+          echo "📦 Output   : ${{ github.event.inputs.output_name }}.zip"
+          echo "🔗 GoFile   : $GOFILE_LINK"
+          echo "📋 Mode     : ${{ github.event.inputs.mode }}"
+          echo "======================================"
