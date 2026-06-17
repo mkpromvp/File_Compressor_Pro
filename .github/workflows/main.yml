@@ -1,0 +1,44 @@
+name: 🔥 Max Compression Upload
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: "🔗 Direct file link"
+        required: true
+      output_name:
+        description: "📦 Output name (without extension)"
+        required: false
+        default: "compressed"
+
+jobs:
+  compress:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📦 Install tools
+        run: |
+          sudo apt update
+          sudo apt install -y p7zip-full wget aria2
+
+      - name: 🚀 Download file (fast)
+        run: |
+          aria2c -x16 -s16 "${{ github.event.inputs.file_url }}" -o input_file
+
+      - name: 🔍 Show file info
+        run: |
+          ls -lh
+          du -h input_file
+
+      - name: 🔥 Ultra Compress (MAX)
+        run: |
+          7z a -t7z "${{ github.event.inputs.output_name }}.7z" input_file \
+          -mx=9 -m0=lzma2 -mfb=273 -md=256m -ms=on -mmt=on
+
+      - name: 📤 Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: compressed-${{ github.run_id }}
+          files: "${{ github.event.inputs.output_name }}.7z"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
