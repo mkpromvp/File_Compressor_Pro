@@ -1,178 +1,76 @@
-name: 💀 Smart Downloader AI + Auto Extract + GoFile (Stable)
+name: Smart Downloader FIXED
 
 on:
 workflow_dispatch:
 inputs:
-mode:
-description: "📦 Mode"
+urls:
+description: "URLs"
 required: true
-default: "game"
-type: choice
-options:
-- game
-- rom
-
-  urls:
-    description: "🔗 URLs (ANY type - direct or page)"
-    required: true
-    type: string
 
   output_name:
-    description: "📁 Output Name"
+    description: "Output Name"
     required: true
-    default: "MK_PRO_OUTPUT"
-    type: string
+    default: "OUTPUT"
 
 jobs:
 build:
 runs-on: ubuntu-latest
 
 steps:
-  - name: ⚙️ Install tools
+  - uses: actions/checkout@v4
+
+  - name: Install
     run: |
       sudo apt update
-      sudo apt install -y aria2 curl jq unzip zip p7zip-full unrar python3 python3-pip
-      pip3 install --break-system-packages requests beautifulsoup4
+      sudo apt install -y aria2 curl unzip zip p7zip-full unrar python3 python3-pip
+      pip3 install requests beautifulsoup4
 
-  - name: 🧠 Smart Link Extractor
+  - name: Prepare
     run: |
       mkdir -p files
+      echo "${{ github.event.inputs.urls }}" > files/links.txt
+
+  - name: Extract Links
+    run: |
+      python3 extractor.py
+
+  - name: Download
+    run: |
       cd files
-
-      echo "${{ github.event.inputs.urls }}" > raw_links.txt
-
-      echo "🔍 Extracting real links..."
-
-      python3 <<EOF
-
-import requests
-from bs4 import BeautifulSoup
-
-final_links = []
-
-with open("raw_links.txt") as f:
-links = [l.strip() for l in f if l.strip()]
-
-for url in links:
-print("Checking:", url)
-try:
-r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-content_type = r.headers.get("content-type","")
-
-    # direct
-    if any(x in url.lower() for x in [".zip",".rar",".7z",".iso"]):
-        final_links.append(url)
-        continue
-
-    if "application" in content_type:
-        final_links.append(url)
-        continue
-
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    # MediaFire
-    btn = soup.find("a", {"id":"downloadButton"})
-    if btn and btn.get("href"):
-        final_links.append(btn.get("href"))
-        continue
-
-    # generic scan
-    for a in soup.find_all("a"):
-        href = a.get("href")
-        if href and any(ext in href for ext in [".zip",".rar",".7z",".iso"]):
-            final_links.append(href)
-
-except Exception as e:
-    print("Error:", e)
-
-remove duplicates
-
-final_links = list(dict.fromkeys(final_links))
-
-with open("direct_links.txt","w") as f:
-for l in final_links:
-f.write(l+"\n")
-
-print("Final links:")
-for l in final_links:
-print(l)
-EOF
-
-      if [ ! -s direct_links.txt ]; then
-        echo "❌ No valid links extracted!"
+      if [ ! -s direct.txt ]; then
+        echo "No links found"
         exit 1
       fi
+      aria2c -x16 -s16 -j5 -i direct.txt
 
-  - name: 📥 Download
+  - name: Extract
     run: |
       cd files
-      aria2c -x16 -s16 -j5 -i direct_links.txt
 
-  - name: 🧩 Extract & Merge
-    run: |
-      cd files
-      echo "🔍 Processing archives..."
-
-      # RAR split
       if ls *.part1.rar 1> /dev/null 2>&1; then
         unrar x -o+ *.part1.rar
       fi
 
-      # RAR single
       if ls *.rar 1> /dev/null 2>&1; then
         unrar x -o+ *.rar
       fi
 
-      # ZIP split
-      if ls *.zip.001 1> /dev/null 2>&1; then
-        7z x -y *.zip.001
-      fi
-
-      # ZIP
       if ls *.zip 1> /dev/null 2>&1; then
         unzip -o "*.zip"
       fi
 
-      # 7z
       if ls *.7z 1> /dev/null 2>&1; then
         7z x -y *.7z
       fi
 
-  - name: ⚙️ Mode Handler
+  - name: Compress
     run: |
-      mkdir -p output
-      cp -r files/* output/ 2>/dev/null || true
-
-      if [ "${{ github.event.inputs.mode }}" = "rom" ]; then
-        echo "📱 Cleaning ROM..."
-        rm -f output/*.img 2>/dev/null || true
-        rm -f output/payload.bin 2>/dev/null || true
-      fi
-
-  - name: 🗜️ Compress
-    run: |
+      mkdir output
+      cp -r files/* output/ || true
       cd output
       zip -r9 "../${{ github.event.inputs.output_name }}.zip" .
 
-  - name: ☁️ Upload GoFile
+  - name: Upload
     run: |
       FILE="${{ github.event.inputs.output_name }}.zip"
-
-      echo "📤 Uploading..."
-
-      RESPONSE=$(curl -s -F "file=@$FILE" https://store1.gofile.io/uploadFile)
-
-      echo "$RESPONSE"
-
-      LINK=$(echo "$RESPONSE" | jq -r '.data.downloadPage // empty')
-
-      if [ -z "$LINK" ]; then
-        echo "❌ Upload failed"
-        exit 1
-      fi
-
-      echo "🔗 $LINK"
-      echo "LINK=$LINK" >> $GITHUB_ENV
-
-  - name: ✅ Done
-    run: echo "🔥 DONE: $LINK"
+      curl -F "file=@$FILE" https://store1.gofile.io/uploadFile
