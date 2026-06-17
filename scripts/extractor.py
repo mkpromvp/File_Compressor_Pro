@@ -21,6 +21,7 @@ HEADERS = {
 ARCHIVE_EXTS = (".zip", ".rar", ".7z", ".iso", ".tar", ".gz", ".xz", ".bz2", ".001")
 URL_RE = re.compile(r'https?://[^\s\]\[\)\(}"\'<>,]+', re.IGNORECASE)
 DOWNLOAD_HOST_HINTS = (
+    "datanodes.to",
     "mediafire.com",
     "gofile.io",
     "pixeldrain.com",
@@ -95,6 +96,10 @@ def main() -> int:
 
         print(f"Checking: {url}")
         try:
+            # Keep original links that already look like direct file URLs.
+            if any(ext in url.lower() for ext in ARCHIVE_EXTS):
+                found.append(url)
+
             if _looks_like_privatebin(url):
                 pb_links = _extract_from_privatebin(url)
                 if pb_links:
@@ -149,6 +154,13 @@ def main() -> int:
 
         except Exception as err:
             print(f"Error processing {url}: {err}")
+
+    # Fallback: if nothing was detected via HTTP parsing, still keep input links
+    # that match known hosts or archive-like patterns for aria2 testing.
+    if not found:
+        for original in links:
+            if _is_likely_download_link(original):
+                found.append(original)
 
     unique_links = list(dict.fromkeys(found))
     if not unique_links:
